@@ -1,0 +1,9 @@
+task_groups:
+  - name: Vault Scanning API
+    claude_code_subagent: implementer
+  - name: Vault Connection UI
+    claude_code_subagent: implementer
+  - name: Folder Tree View Component
+    claude_code_subagent: implementer
+  - name: Integration Testing
+    claude_code_subagent: implementation-verifier

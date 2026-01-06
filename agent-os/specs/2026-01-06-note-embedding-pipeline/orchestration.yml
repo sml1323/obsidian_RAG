@@ -1,0 +1,11 @@
+task_groups:
+  - name: Embedding Engine & Storage
+    claude_code_subagent: implementer
+  - name: Content Processing Pipeline
+    claude_code_subagent: implementer
+  - name: API Endpoints
+    claude_code_subagent: implementer
+  - name: Trigger UI
+    claude_code_subagent: implementer
+  - name: Test Review & Gap Analysis
+    claude_code_subagent: implementer

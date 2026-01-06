@@ -1,0 +1,5 @@
+task_groups:
+  - name: Chat API & RAG Logic
+    claude_code_subagent: implementer
+  - name: Chat Interface
+    claude_code_subagent: implementer
