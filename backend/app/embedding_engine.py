@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import List, Any, Optional
 import os
-from langchain_huggingface import HuggingFaceEmbeddings
+# from langchain_huggingface import HuggingFaceEmbeddings
+# HuggingFace Embeddings disabled to save disk space
 from langchain_openai import OpenAIEmbeddings
 from langchain_chroma import Chroma
 from langchain_core.documents import Document
@@ -23,16 +24,20 @@ class EmbeddingStrategy(ABC):
 class LocalEmbeddingStrategy(EmbeddingStrategy):
     def __init__(self, model_name: str = "BAAI/bge-m3"):
         self.model_name = model_name
-        self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        # self.embeddings = HuggingFaceEmbeddings(model_name=model_name)
+        raise NotImplementedError("Local embedding strategy is disabled in this environment to save disk space. Please use OpenAI strategy.")
         
     def get_embeddings_model(self):
-        return self.embeddings
+        # return self.embeddings
+        raise NotImplementedError("Local embedding strategy is disabled")
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        return self.embeddings.embed_documents(texts)
+        # return self.embeddings.embed_documents(texts)
+        raise NotImplementedError("Local embedding strategy is disabled")
         
     def embed_query(self, text: str) -> List[float]:
-        return self.embeddings.embed_query(text)
+        # return self.embeddings.embed_query(text)
+        raise NotImplementedError("Local embedding strategy is disabled")
 
 class OpenAIEmbeddingStrategy(EmbeddingStrategy):
     def __init__(self, model_name: str = "text-embedding-3-small", api_key: Optional[str] = None):

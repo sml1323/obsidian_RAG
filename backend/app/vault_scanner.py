@@ -4,7 +4,10 @@ Vault scanning module for Obsidian vault file discovery.
 import os
 from datetime import datetime
 from pathlib import Path
+from pathlib import Path
 from typing import Optional
+from .settings import settings_service
+
 
 # Excluded folders that should not be scanned
 EXCLUDED_FOLDERS = [".obsidian", ".trash", "node_modules"]
@@ -98,3 +101,70 @@ def get_all_markdown_files(vault_path: Path) -> list[Path]:
             if f.endswith(".md"):
                 md_files.append(Path(root) / f)
     return md_files
+
+
+# Project Recognition & Persistence logic moved to settings_service
+
+
+def scan_projects(vault_path: Path, root_folder: str = "Projects") -> list[dict]:
+    """
+    Scan for projects within a specific root folder.
+    Returns a list of project dicts with metadata and progress.
+    """
+    projects = []
+    projects_root = vault_path / root_folder
+    
+    if not projects_root.exists() or not projects_root.is_dir():
+        return []
+        
+    # Load progress once
+    progress_data = settings_service.load_projects()
+
+    
+    # 1. Iterate immediate subfolders
+    try:
+        # Get immediate subdirectories, skipping excluded ones
+        entries = sorted(projects_root.iterdir(), key=lambda x: x.name.lower())
+        for entry in entries:
+            if not entry.is_dir():
+                continue
+            if is_excluded(entry):
+                continue
+                
+            # This entry is a "Project"
+            project_path_str = str(entry.relative_to(vault_path))
+            
+            # 2. Recursively calculate metadata for this project
+            # Reuse logic similar to build_tree or count_markdown_files logic but focused on this subtree
+            
+            file_count = 0
+            last_modified_dt = datetime.min
+            
+            for root, dirs, files in os.walk(entry):
+                # Filter excluded dirs in-place
+                dirs[:] = [d for d in dirs if d not in EXCLUDED_FOLDERS]
+                
+                for f in files:
+                    if f.endswith(".md"):
+                        file_count += 1
+                        fp = Path(root) / f
+                        mtime = datetime.fromtimestamp(fp.stat().st_mtime)
+                        if mtime > last_modified_dt:
+                            last_modified_dt = mtime
+            
+            # If no files, use the project folder's mtime (or min date if preferred, but folder mtime is safer fallback)
+            if file_count == 0:
+                 last_modified_dt = datetime.fromtimestamp(entry.stat().st_mtime)
+            
+            projects.append({
+                "name": entry.name,
+                "path": project_path_str,
+                "file_count": file_count,
+                "last_modified": last_modified_dt.isoformat(),
+                "progress": progress_data.get(project_path_str, 0)
+            })
+            
+    except PermissionError:
+        pass # Skip if permission denied
+        
+    return projects

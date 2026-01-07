@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional, Dict, Any
 
 from .vault_scanner import build_tree, count_markdown_files
+from .settings import settings_service
+
 
 app = FastAPI(
     title="Obsidian Vault API",
@@ -101,13 +103,14 @@ async def get_vault_files():
     """
     global _connected_vault
     
-    if _connected_vault is None:
+    vault = await _get_or_connect_vault()
+    if not vault:
         raise HTTPException(
             status_code=400,
             detail="No vault connected. Use POST /api/vault/connect first."
         )
     
-    if not _connected_vault.exists():
+    if not vault.exists():
         _connected_vault = None
         raise HTTPException(
             status_code=404,
@@ -115,10 +118,10 @@ async def get_vault_files():
         )
     
     try:
-        tree = build_tree(_connected_vault)
+        tree = build_tree(vault)
         return {
             "success": True,
-            "vault_path": str(_connected_vault),
+            "vault_path": str(vault),
             "tree": tree
         }
     except PermissionError:
@@ -133,7 +136,9 @@ async def get_vault_status():
     """Get the current vault connection status."""
     global _connected_vault
     
-    if _connected_vault is None:
+    vault = await _get_or_connect_vault()
+    
+    if not vault:
         return {
             "connected": False,
             "path": None
@@ -141,9 +146,123 @@ async def get_vault_status():
     
     return {
         "connected": True,
-        "path": str(_connected_vault),
-        "exists": _connected_vault.exists()
+        "path": str(vault),
+        "exists": vault.exists()
     }
+
+async def _get_or_connect_vault():
+    """
+    Helper to get connected vault or try to recover from settings.
+    """
+    global _connected_vault
+    
+    if _connected_vault and _connected_vault.exists():
+        return _connected_vault
+        
+    # Try to recover from settings
+    try:
+        settings = settings_service.load_settings()
+        path_str = settings.get("vault_path")
+        
+        if path_str:
+            path = Path(path_str)
+            if path.exists() and path.is_dir():
+                _connected_vault = path
+                print(f"Auto-connected to vault from settings: {path}")
+                return _connected_vault
+    except Exception as e:
+        print(f"Failed to auto-connect: {e}")
+        
+    return None
+
+
+
+@app.get("/api/vault/files/content")
+async def get_file_content(path: str):
+    """
+    Get the content of a specific file in the vault.
+    """
+    global _connected_vault
+    
+    vault = await _get_or_connect_vault()
+    
+    if not vault:
+        raise HTTPException(status_code=400, detail="No vault connected")
+        
+    try:
+        # Secure file reading
+        # Ensure the path is relative to the vault root and doesn't escape
+        # Note: 'path' param typically comes from the tree structure which is relative or absolute?
+        # Our tree structure currently provides 'path' as absolute or relative?
+        # scan_projects uses relative, but build_tree might use something else.
+        # Let's assume path is relative to vault root
+        
+        target_path = (vault / path).resolve()
+        
+        # Security check: Ensure target_path is within vault
+        if not str(target_path).startswith(str(vault.resolve())):
+             # Fallback: maybe client sent absolute path?
+             target_path = Path(path).resolve()
+             if not str(target_path).startswith(str(vault.resolve())):
+                raise HTTPException(status_code=403, detail="Access denied: Path outside vault")
+        
+        if not target_path.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+            
+        if not target_path.is_file():
+             raise HTTPException(status_code=400, detail="Not a file")
+             
+        content = target_path.read_text(encoding="utf-8")
+        return {"success": True, "content": content}
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Settings API ---
+
+class SettingsResponse(BaseModel):
+    vault_path: str
+    model_type: str
+    api_keys: Dict[str, str]
+
+class SettingsUpdate(BaseModel):
+    vault_path: Optional[str] = None
+    model_type: Optional[str] = None
+    api_keys: Optional[Dict[str, str]] = None
+
+@app.get("/api/settings", response_model=SettingsResponse)
+async def get_settings():
+    """Get current system settings."""
+    return settings_service.load_settings()
+
+@app.patch("/api/settings", response_model=SettingsResponse)
+async def update_settings(update: SettingsUpdate):
+    """
+    Update system settings. 
+    Partial updates are supported.
+    """
+    current = settings_service.load_settings()
+    
+    # Update dict manually to handle nested api_keys if partial
+    new_settings = current.copy()
+    
+    if update.vault_path is not None:
+        new_settings["vault_path"] = update.vault_path
+    if update.model_type is not None:
+        new_settings["model_type"] = update.model_type
+    
+    if update.api_keys is not None:
+        # Merge api keys
+        for k, v in update.api_keys.items():
+            new_settings["api_keys"][k] = v
+            
+    success = settings_service.save_settings(new_settings)
+    if not success:
+         raise HTTPException(status_code=500, detail="Failed to save settings")
+         
+    return new_settings
+
 
 # --- Embedding Pipeline ---
 
@@ -210,14 +329,14 @@ async def sync_embeddings(request: SyncRequest):
     """
     Trigger the embedding pipeline to sync the connected vault.
     """
-    global _connected_vault
+    vault = await _get_or_connect_vault()
     
-    if _connected_vault is None or not _connected_vault.exists():
+    if not vault or not vault.exists():
         raise HTTPException(status_code=400, detail="No valid vault connected")
         
     try:
         pipeline = get_pipeline(request.model_type, request.api_key)
-        result = pipeline.process_vault(_connected_vault)
+        result = pipeline.process_vault(vault)
         
         if result.get("status") == "error":
              raise HTTPException(status_code=500, detail=result.get("message"))
@@ -237,21 +356,115 @@ async def chat(request: ChatRequest):
     """
     Process a chat message using RAG.
     """
-    global _connected_vault
+    vault = await _get_or_connect_vault()
     
-    if _connected_vault is None or not _connected_vault.exists():
+    if not vault or not vault.exists():
         raise HTTPException(status_code=400, detail="No valid vault connected")
         
     try:
         engine = get_chat_pipeline()
         response = engine.chat(
             query=request.message,
-            vault_path=_connected_vault,
+            vault_path=vault,
             model_config=request.config
         )
         return ChatResponse(
             role=response["role"],
             content=response["content"]
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Projects API ---
+
+from .vault_scanner import scan_projects
+
+
+class ProjectUpdateRequest(BaseModel):
+    path: str
+    progress: int
+
+@app.get("/api/projects")
+async def get_projects(root_path: str = "Projects"):
+    """
+    Get list of projects from the connected vault.
+    Scans the specified root path (default: "Projects").
+    """
+    vault = await _get_or_connect_vault()
+    
+    if not vault:
+        raise HTTPException(
+            status_code=400,
+            detail="No vault connected. Use POST /api/vault/connect first."
+        )
+        
+    if not vault.exists():
+         raise HTTPException(status_code=404, detail="Vault path not found")
+         
+    try:
+        projects = scan_projects(vault, root_path)
+        return {
+            "success": True,
+            "root_path": root_path,
+            "projects": projects
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.patch("/api/projects")
+async def update_project(update: ProjectUpdateRequest):
+    """
+    Update project progress.
+    """
+    if not (0 <= update.progress <= 100):
+        raise HTTPException(status_code=400, detail="Progress must be between 0 and 100")
+        
+    success = settings_service.save_project_progress(update.path, update.progress)
+
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save progress")
+        
+    return {"success": True, "message": "Progress updated"}
+
+
+# --- Smart Review API ---
+
+from .smart_review import get_random_review_notes
+
+@app.get("/api/reviews/random")
+async def get_random_reviews(count: int = 5):
+    """
+    Get N random notes for review, filtering out Archive/Templates.
+    """
+    vault = await _get_or_connect_vault()
+    
+    if not vault:
+        raise HTTPException(
+            status_code=400,
+            detail="No vault connected. Use POST /api/vault/connect first."
+        )
+        
+    if not vault.exists():
+         raise HTTPException(status_code=404, detail="Vault path not found")
+         
+    try:
+        notes = get_random_review_notes(vault, count)
+        
+        # Return list of file metadata
+        # Reuse get_file_metadata logic or simplified return?
+        # Requirement said: "Reuse get_file_metadata..." implicitly via reusability check
+        # Let's inspect get_file_metadata in vault_scanner again to be sure or just import it.
+        # But get_random_review_notes returns Paths.
+        
+        from .vault_scanner import get_file_metadata
+        
+        results = []
+        for note_path in notes:
+             meta = get_file_metadata(note_path, vault)
+             results.append(meta)
+             
+        return results
+        
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

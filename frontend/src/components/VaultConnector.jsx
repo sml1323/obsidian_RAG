@@ -1,4 +1,5 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
+
 
 const API_BASE = 'http://localhost:8000';
 
@@ -6,8 +7,9 @@ const API_BASE = 'http://localhost:8000';
  * VaultConnector Component
  * Allows users to input an Obsidian vault path and connect to it.
  */
-export function VaultConnector({ onConnect }) {
-    const [path, setPath] = useState('');
+export function VaultConnector({ onConnect, initialPath = '', autoConnect = false }) {
+    const [path, setPath] = useState(initialPath);
+
     const [status, setStatus] = useState('idle'); // idle, loading, success, error
     const [message, setMessage] = useState('');
     const [fileCount, setFileCount] = useState(0);
@@ -49,6 +51,20 @@ export function VaultConnector({ onConnect }) {
             setMessage(error.message || '연결 중 오류가 발생했습니다');
         }
     }, [path, onConnect]);
+
+    // Auto-connect if requested
+    useEffect(() => {
+        if (autoConnect && initialPath) {
+            // We need to use the prop initialPath directly or ensure state is set,
+            // but handleConnect uses 'path' state.
+            // Since initial state is set, we can just trigger handleConnect.
+            // But we need to ensure this only runs once.
+            // Actually, handleConnect depends on 'path'.
+            // If we run this effect, handleConnect will use current 'path' state which is initialPath.
+            handleConnect();
+        }
+    }, []); // Run once on mount if autoConnect is true
+
 
     const handleKeyDown = (e) => {
         if (e.key === 'Enter') {

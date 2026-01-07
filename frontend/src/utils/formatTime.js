@@ -21,3 +21,6 @@ export function formatRelativeTime(isoDate) {
 
     return date.toLocaleDateString('ko-KR');
 }
+
+export const formatTimeAgo = formatRelativeTime;
+
