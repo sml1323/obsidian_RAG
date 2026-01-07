@@ -57,3 +57,5 @@ yarn-error.log
 .env.test.local
 .env.production.local
 backend/chroma_db/
+backend/storage/settings.json
+storage/settings.json
